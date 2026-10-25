@@ -28,15 +28,15 @@ extern "C" {
 /* ADC 通道映射 (ESP32-S3 ADC1) — 接线 GPIO5/6/1/2, 顺序 LX/LY/RY/RX */
 #define ROCKER_ADC_UNIT       ADC_UNIT_1
 #define ROCKER_CH_LX          ADC_CHANNEL_4   /* GPIO5  */
-#define ROCKER_CH_LY          ADC_CHANNEL_5   /* GPIO6  */
+#define ROCKER_CH_LY          ADC_CHANNEL_5   /* GPIO6  — 必须用 IO6 (原理图 L_ADC2); 同线在 IO4 验证过是好的, 若浮空贴 4095 查 IO6 焊点 */
 #define ROCKER_CH_RY          ADC_CHANNEL_0   /* GPIO1  */
 #define ROCKER_CH_RX          ADC_CHANNEL_1   /* GPIO2  */
 
-/* 各通道静止时的中心值 (根据实际测量校准) */
-#define ROCKER_CENTER_LX      1942
-#define ROCKER_CENTER_LY      1997
-#define ROCKER_CENTER_RY      1910
-#define ROCKER_CENTER_RX      1968
+/* 各通道静止时的中心值 (根据实际测量校准, 2026-10-25 串口实测) */
+#define ROCKER_CENTER_LX      1691
+#define ROCKER_CENTER_LY      1938   /* 实测静止值 (wiper 本身完好, 与接哪个脚无关) */
+#define ROCKER_CENTER_RY      1721
+#define ROCKER_CENTER_RX      1660
 
 /* 参数配置 */
 #define ROCKER_DEADZONE       120   /* 死区范围，中心附近视为0 */
@@ -44,7 +44,7 @@ extern "C" {
 #define ROCKER_OUTPUT_MAX     100   /* 输出最大值 (-100 ~ +100) */
 #define ROCKER_INVERT_RY      1     /* 右摇杆Y轴反转 */
 #define ROCKER_INVERT_RX      1     /* 右摇杆X轴反转 */
-#define ROCKER_DEBUG_LOG      0     /* 调试打印开关 (1=开, 0=关) */
+#define ROCKER_DEBUG_LOG      1     /* 调试打印开关 (1=开, 0=关) */
 #define ROCKER_PERIOD_MS      50    /* 采样周期 (定时器唤醒间隔) */
 
 /* ===== API ===== */

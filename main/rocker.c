@@ -169,9 +169,10 @@ void rocker_read(rocker_value_t *val)
 #endif
 
 #if ROCKER_DEBUG_LOG
+    /* 列顺序统一为 LX LY RX RY (通道表里 RX/RY 是反的, 这里按 val 列对齐) */
     ESP_LOGI(TAG, "raw: %4d %4d %4d %4d  val: %4d %4d %4d %4d",
              sum[0] / ROCKER_SAMPLES, sum[1] / ROCKER_SAMPLES,
-             sum[2] / ROCKER_SAMPLES, sum[3] / ROCKER_SAMPLES,
+             sum[3] / ROCKER_SAMPLES, sum[2] / ROCKER_SAMPLES,
              s_value.lx, s_value.ly, s_value.rx, s_value.ry);
 #endif
 

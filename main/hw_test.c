@@ -2,10 +2,10 @@
  * @file hw_test.c
  * @brief 硬件模块逐项测试 main (ESP掌机 Board1)
  *
- * 一个模块一个模块测, 当前阶段: SD 卡视频 → LCD 显示。
- *   [已完成] LCD 测试画面确认正常 (白屏/彩条/灰阶/棋盘/文字)
- *   [当前]   SD 视频上屏: SD 挂载后找根目录第一个 *.mp4 循环播放
- *   [待测]   按键 / 摇杆 / 喇叭 / MP3 (代码在下方, 调用处已注释, 逐个打开)
+ * 一个模块一个模块测, 当前阶段: 逐项硬件测试进行中。
+ *   [已完成] LCD 测试画面 / 摇杆 (LY 修复归位 IO6) / 喇叭蜂鸣+音调确认正常
+ *   [搁置]   另一摇杆损坏, 暂不处理
+ *   [待测]   按键 / MP3 / SD 视频 (代码在下方, 调用处已注释, 逐个打开)
  *
  * 片源要求 (PC 端 ffmpeg 预转换, H.264 baseline 320x240):
  *   ffmpeg -i 输入.mp4 -vf scale=320:240 -c:v libx264 -profile:v baseline \
@@ -218,9 +218,52 @@ static void __attribute__((unused)) test_button(void)
     }
 }
 
-/* ===== 摇杆测试: 15s 两杆打满 4 轴, 行程判定 (当前未调用) ===== */
+/* ===== LY 断线排障: 扫全 ADC1 看 wiper 接到了哪个脚 (当前未调用) =====
+ * 只扫 IO1/2/4/5/6/7/8: IO3=LCD_RST、IO9/10=SD 不能动。
+ * 请边扫边上下拨左摇杆 LY —— 哪个通道跟着跳, wiper 就接在那个脚上;
+ * 全部纹丝不动 = wiper 线没接到任何 ADC 脚 (真断线)。 */
+static void __attribute__((unused)) test_adc_scan(void)
+{
+    static const char *STAG = "adc_scan";
+    static const int scan_ch[7] = { 0, 1, 3, 4, 5, 6, 7 };   /* 跳过 CH2 (GPIO3=LCD_RST) */
+    adc_oneshot_unit_handle_t h = NULL;
+    adc_oneshot_unit_init_cfg_t ucfg = { .unit_id = ADC_UNIT_1 };
+    adc_oneshot_chan_cfg_t ccfg = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    char line[48];
+
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&ucfg, &h));
+    for (int i = 0; i < 7; i++) {
+        ESP_ERROR_CHECK(adc_oneshot_config_channel(h, (adc_channel_t)scan_ch[i], &ccfg));
+    }
+
+    ESP_LOGI(STAG, "scan IO1/2/4/5/6/7/8 @200ms x 30s — 请上下拨左摇杆 LY!");
+    lcd_status("TEST: ADC SCAN", "move LY up/down!", "IO1-IO8 raw on serial");
+
+    for (int t = 0; t < 150; t++) {     /* 150 * 200ms = 30s */
+        int raw[8] = {0};
+        for (int i = 0; i < 7; i++) {
+            ESP_ERROR_CHECK(adc_oneshot_read(h, (adc_channel_t)scan_ch[i], &raw[scan_ch[i]]));
+        }
+        snprintf(line, sizeof(line), "IO1=%4d IO2=%4d IO4=%4d IO5=%4d",
+                 raw[0], raw[1], raw[3], raw[4]);
+        ESP_LOGI(STAG, "IO1=%4d IO2=%4d IO4=%4d IO5=%4d IO6=%4d IO7=%4d IO8=%4d",
+                 raw[0], raw[1], raw[3], raw[4], raw[5], raw[6], raw[7]);
+        LCD_ShowString(8, 48, line, LCD_WHITE, LCD_BLACK, 1);
+        snprintf(line, sizeof(line), "IO6=%4d IO7=%4d IO8=%4d", raw[5], raw[6], raw[7]);
+        LCD_ShowString(8, 64, line, LCD_WHITE, LCD_BLACK, 1);
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+    ESP_LOGI(STAG, "scan done (对比日志里各通道 min/max)");
+    lcd_status("ADC SCAN DONE", "check serial log", "which IO follows LY?");
+}
+
+/* ===== 摇杆测试: 15s 两杆打满 4 轴, LCD 实时数值, 行程判定 (当前未调用) ===== */
 static void __attribute__((unused)) test_rocker(void)
 {
+    char line[48];
     int rmin[4] = { 999, 999, 999, 999};   /* lx ly rx ry */
     int rmax[4] = {-999, -999, -999, -999};
     static const char *axis[4] = { "LX", "LY", "RX", "RY" };
@@ -229,11 +272,11 @@ static void __attribute__((unused)) test_rocker(void)
     rocker_init();
     ESP_LOGI(TAG, "请在 %ds 内把两个摇杆各方向打满 (4 轴行程>%d 均过提前结束)",
              ROCKER_WINDOW_MS / 1000, ROCKER_SPAN_PASS);
-    lcd_status("TEST: ROCKER", "move both sticks fully", "all 4 axes");
+    lcd_status("TEST: ROCKER", "move both sticks fully", "values live on LCD");
 
     while (elapsed < ROCKER_WINDOW_MS) {
         rocker_value_t v;
-        rocker_read(&v);
+        rocker_get(&v);                 /* 后台线程 50ms 采样, 这里只读缓存 */
         int a[4] = { v.lx, v.ly, v.rx, v.ry };
         for (int i = 0; i < 4; i++) {
             if (a[i] < rmin[i]) rmin[i] = a[i];
@@ -248,6 +291,18 @@ static void __attribute__((unused)) test_rocker(void)
         if (ok_cnt == 4) {
             break;
         }
+
+        /* LCD 实时: 当前值 + 已测行程 (松手时看是否回 0, 推满看是否到 ±100) */
+        snprintf(line, sizeof(line), "LX%+4d LY%+4d  span %3d %3d",
+                 v.lx, v.ly, rmax[0] - rmin[0], rmax[1] - rmin[1]);
+        LCD_ShowString(8, 48, line, LCD_WHITE, LCD_BLACK, 1);
+        snprintf(line, sizeof(line), "RX%+4d RY%+4d  span %3d %3d",
+                 v.rx, v.ry, rmax[2] - rmin[2], rmax[3] - rmin[3]);
+        LCD_ShowString(8, 64, line, LCD_WHITE, LCD_BLACK, 1);
+        snprintf(line, sizeof(line), "axes ok %d/4  %2ds left",
+                 ok_cnt, (ROCKER_WINDOW_MS - elapsed) / 1000);
+        LCD_ShowString(8, 80, line, LCD_GRAY, LCD_BLACK, 1);
+
         vTaskDelay(pdMS_TO_TICKS(100));
         elapsed += 100;
         if (elapsed % 5000 == 0) {
@@ -269,6 +324,17 @@ static void __attribute__((unused)) test_rocker(void)
     ESP_LOGI(TAG, "ROCKER: %s (%d/4 axes, span LX=%d LY=%d RX=%d RY=%d)",
              pass == 4 ? "PASS" : "FAIL", pass,
              rmax[0] - rmin[0], rmax[1] - rmin[1], rmax[2] - rmin[2], rmax[3] - rmin[3]);
+
+    /* 结果上屏 (Green=PASS Red=FAIL) */
+    LCD_Clear(LCD_BLACK);
+    snprintf(line, sizeof(line), "ROCKER: %s", pass == 4 ? "PASS" : "FAIL");
+    LCD_ShowString(8, 8, line, pass == 4 ? LCD_GREEN : LCD_RED, LCD_BLACK, 2);
+    snprintf(line, sizeof(line), "span LX=%d LY=%d RX=%d RY=%d",
+             rmax[0] - rmin[0], rmax[1] - rmin[1], rmax[2] - rmin[2], rmax[3] - rmin[3]);
+    LCD_ShowString(8, 40, line, LCD_WHITE, LCD_BLACK, 1);
+    snprintf(line, sizeof(line), "%d/4 axes >= %d   (serial: detail)", pass, ROCKER_SPAN_PASS);
+    LCD_ShowString(8, 56, line, LCD_GRAY, LCD_BLACK, 1);
+    LCD_Sync();
 }
 
 /* ===== 喇叭诊断波形: 50Hz 方波嗡嗡 0.4s + 440Hz 正弦音调 0.5s (当前未调用) ===== */
@@ -476,7 +542,7 @@ static void list_tree(const char *dirpath, int depth)
 }
 
 /* 视频任务: 挂 SD → 找视频 → 循环播 (永不返回); 三种状态各有明确提示 */
-static void video_task(void *arg)
+static void __attribute__((unused)) video_task(void *arg)
 {
     (void)arg;
     char path[520];
@@ -513,11 +579,12 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "==== ESP掌机 HW TEST (module-by-module) ====");
     ESP_LOGI(TAG, "free heap = %u", (unsigned)esp_get_free_heap_size());
-    ESP_LOGI(TAG, "current: SD video -> LCD  (LCD done, others commented)");
+    ESP_LOGI(TAG, "current: SPEAKER buzz+tone test  (LCD done, others commented)");
     ESP_LOGI(TAG, "pins: LCD MOSI=%d CLK=%d CS=%d DC=%d RST=%d BCKL=%d",
              LCD_GPIO_MOSI, LCD_GPIO_CLK, LCD_GPIO_CS, LCD_GPIO_DC, LCD_GPIO_RST, LCD_GPIO_BCKL);
     ESP_LOGI(TAG, "pins: SD  MOSI=%d MISO=%d CLK=%d CS=%d",
              SD_GPIO_MOSI, SD_GPIO_MISO, SD_GPIO_CLK, SD_GPIO_CS);
+    ESP_LOGI(TAG, "pins: ROCKER ADC1 LX=GPIO5 LY=GPIO6 RX=GPIO2 RY=GPIO1 (see rocker.h)");
 
     /* LCD 只做初始化 (测试画面已确认正常, 不再跑) */
     LCD_Init();
@@ -532,10 +599,11 @@ void app_main(void)
     /* --- 逐项测试: 一个模块一个模块来, 之后的先注释, 测哪个打开哪个 --- */
     /* (void)sd_selftest();  */     /* [待测] SD 列目录/写读自检 */
     /* test_button();        */     /* [待测] 10 键 30s 覆盖率 */
-    /* test_rocker();        */     /* [待测] 双摇杆 4 轴行程 */
-    /* test_spk();           */     /* [待测] 喇叭蜂鸣/音调 */
+    /* test_rocker();        */     /* [搁置] 双摇杆 4 轴行程 (有一摇杆损坏, 暂不管) */
+    /* test_adc_scan();      */     /* [排障] LY 断线: 全 ADC1 扫描 */
+    test_spk();                     /* [当前] 喇叭蜂鸣/音调 */
     /* test_mp3();           */     /* [待测] MP3 试听 8s */
 
-    /* [当前] SD 视频 → LCD: 找根目录第一个 *.mp4 循环播 */
-    xTaskCreatePinnedToCore(video_task, "video", 16 * 1024, NULL, 5, NULL, 1);
+    /* [待测] SD 视频 → LCD: 找根目录第一个 *.mp4 循环播 */
+    /* xTaskCreatePinnedToCore(video_task, "video", 16 * 1024, NULL, 5, NULL, 1); */
 }
